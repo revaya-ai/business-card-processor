@@ -1,0 +1,349 @@
+{
+  "name": "Business Card Processor (Wix)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "business-card-upload",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "webhook-001",
+      "name": "Wix Webhook",
+      "webhookId": "business-card-upload"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Business card received. Processing.",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [240, 160],
+      "id": "respond-001",
+      "name": "Respond to Wix"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json[\"Business Card Upload\"] }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "id": "download-image-001",
+      "name": "Download Image from Wix"
+    },
+    {
+      "parameters": {
+        "jsCode": "const binaryData = $input.first().binary.data;\nconst base64 = binaryData.data;\nconst mimeType = binaryData.mimeType || 'image/jpeg';\n\nconst formData = $('Wix Webhook').first().json;\n\nreturn [{\n  json: {\n    image_base64: `data:${mimeType};base64,${base64}`,\n    event_name: formData['Event Name'] || '',\n    event_date: formData['Event Date'] || '',\n    your_notes: formData['Your Notes'] || ''\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0],
+      "id": "convert-base64-001",
+      "name": "Convert to Base64"
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "text": "Extract all contact information from this business card image. Return ONLY valid JSON with no additional text or markdown.\n\nRequired JSON format:\n{\n  \"first_name\": \"\",\n  \"last_name\": \"\",\n  \"email\": \"\",\n  \"phone\": \"\",\n  \"company\": \"\",\n  \"title\": \"\",\n  \"address\": \"\",\n  \"website\": \"\",\n  \"linkedin\": \"\",\n  \"other_social\": \"\",\n  \"card_notes\": \"\"\n}\n\nRules:\n- Extract exactly what is visible on the card\n- If a field is not present, use empty string\n- For card_notes, include any handwritten text visible on the card\n- Do not guess or fabricate information\n- Return ONLY the JSON object, no explanation",
+        "inputType": "base64",
+        "binaryPropertyName": "={{ $json.image_base64 }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [720, 0],
+      "id": "extract-card-001",
+      "name": "Extract Card Info",
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawContent = $input.first().json.content;\n\nlet cleanJson = rawContent;\nif (typeof cleanJson === 'string') {\n  cleanJson = cleanJson.replace(/```json\\n?/gi, '').replace(/```\\n?/gi, '').trim();\n}\n\ntry {\n  const parsed = typeof cleanJson === 'string' ? JSON.parse(cleanJson) : cleanJson;\n  \n  const formData = $('Convert to Base64').first().json;\n  \n  return [{\n    json: {\n      first_name: parsed.first_name || '',\n      last_name: parsed.last_name || '',\n      email: parsed.email || '',\n      phone: parsed.phone || '',\n      company: parsed.company || '',\n      title: parsed.title || '',\n      address: parsed.address || '',\n      website: parsed.website || '',\n      linkedin: parsed.linkedin || '',\n      other_social: parsed.other_social || '',\n      card_notes: parsed.card_notes || '',\n      your_notes: formData.your_notes || '',\n      event_name: formData.event_name || '',\n      event_date: formData.event_date || '',\n      date_added: new Date().toISOString().split('T')[0],\n      email_sent: 'No',\n      date_contacted: ''\n    }\n  }];\n} catch (err) {\n  throw new Error('Failed to parse card data: ' + err.message);\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 0],
+      "id": "parse-data-001",
+      "name": "Parse Card Data"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1PuV5w79JnyqecVI9D9uxYp3rA6cY5UOM",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Templates",
+          "mode": "list"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Event Name",
+              "lookupValue": "={{ $json.event_name }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1200, 0],
+      "id": "get-template-001",
+      "name": "Get Email Template",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const contact = $('Parse Card Data').first().json;\nconst template = $input.first().json;\n\nlet subject = template['Subject Line'] || 'Great connecting!';\nlet body = template['Email Body'] || 'Hi {{first_name}},\\n\\nGreat meeting you!\\n\\nBest regards';\n\nconst replacements = {\n  '{{first_name}}': contact.first_name,\n  '{{last_name}}': contact.last_name,\n  '{{company}}': contact.company,\n  '{{title}}': contact.title,\n  '{{event_name}}': contact.event_name,\n  '{{event_date}}': contact.event_date,\n  '{{your_signature}}': '[YOUR SIGNATURE]',\n  '{{custom_paragraph}}': contact.your_notes ? `I particularly enjoyed discussing ${contact.your_notes}.` : 'I look forward to exploring how we might collaborate.'\n};\n\nfor (const [key, value] of Object.entries(replacements)) {\n  subject = subject.replace(new RegExp(key.replace(/[{}]/g, '\\\\$&'), 'gi'), value || '');\n  body = body.replace(new RegExp(key.replace(/[{}]/g, '\\\\$&'), 'gi'), value || '');\n}\n\nreturn [{\n  json: {\n    ...contact,\n    email_subject: subject,\n    email_body: body\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 0],
+      "id": "build-email-001",
+      "name": "Build Email Content"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1PuV5w79JnyqecVI9D9uxYp3rA6cY5UOM",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Contacts",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "First Name": "={{ $json.first_name }}",
+            "Last Name": "={{ $json.last_name }}",
+            "Email": "={{ $json.email }}",
+            "Phone": "={{ $json.phone }}",
+            "Company": "={{ $json.company }}",
+            "Title": "={{ $json.title }}",
+            "Address": "={{ $json.address }}",
+            "Website": "={{ $json.website }}",
+            "LinkedIn": "={{ $json.linkedin }}",
+            "Other Social": "={{ $json.other_social }}",
+            "Card Notes": "={{ $json.card_notes }}",
+            "Your Notes": "={{ $json.your_notes }}",
+            "Event Name": "={{ $json.event_name }}",
+            "Event Date": "={{ $json.event_date }}",
+            "Date Added": "={{ $json.date_added }}",
+            "Email Sent": "No",
+            "Date Contacted": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {"id": "First Name", "displayName": "First Name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Last Name", "displayName": "Last Name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Email", "displayName": "Email", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Phone", "displayName": "Phone", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Company", "displayName": "Company", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Title", "displayName": "Title", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Address", "displayName": "Address", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Website", "displayName": "Website", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "LinkedIn", "displayName": "LinkedIn", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Other Social", "displayName": "Other Social", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Card Notes", "displayName": "Card Notes", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Your Notes", "displayName": "Your Notes", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Event Name", "displayName": "Event Name", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Event Date", "displayName": "Event Date", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Date Added", "displayName": "Date Added", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Email Sent", "displayName": "Email Sent", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Date Contacted", "displayName": "Date Contacted", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true}
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1680, 0],
+      "id": "add-contact-001",
+      "name": "Add Contact to Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-email-exists",
+              "leftValue": "={{ $('Build Email Content').first().json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1920, 0],
+      "id": "check-email-001",
+      "name": "Has Email Address?"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toRecipients": "={{ $('Build Email Content').first().json.email }}",
+        "subject": "={{ $('Build Email Content').first().json.email_subject }}",
+        "bodyContent": "={{ $('Build Email Content').first().json.email_body }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [2160, -100],
+      "id": "send-email-001",
+      "name": "Send Follow-up Email",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "YOUR_MICROSOFT_CREDENTIAL_ID",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1PuV5w79JnyqecVI9D9uxYp3rA6cY5UOM",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Contacts",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Email": "={{ $('Build Email Content').first().json.email }}",
+            "Email Sent": "Yes",
+            "Date Contacted": "={{ $now.format('yyyy-MM-dd') }}"
+          },
+          "matchingColumns": ["Email"],
+          "schema": [
+            {"id": "Email", "displayName": "Email", "required": false, "defaultMatch": true, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Email Sent", "displayName": "Email Sent", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true},
+            {"id": "Date Contacted", "displayName": "Date Contacted", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true}
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2400, -100],
+      "id": "update-status-001",
+      "name": "Update Email Status",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Wix Webhook": {
+      "main": [
+        [
+          {"node": "Download Image from Wix", "type": "main", "index": 0},
+          {"node": "Respond to Wix", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Download Image from Wix": {
+      "main": [[{"node": "Convert to Base64", "type": "main", "index": 0}]]
+    },
+    "Convert to Base64": {
+      "main": [[{"node": "Extract Card Info", "type": "main", "index": 0}]]
+    },
+    "Extract Card Info": {
+      "main": [[{"node": "Parse Card Data", "type": "main", "index": 0}]]
+    },
+    "Parse Card Data": {
+      "main": [[{"node": "Get Email Template", "type": "main", "index": 0}]]
+    },
+    "Get Email Template": {
+      "main": [[{"node": "Build Email Content", "type": "main", "index": 0}]]
+    },
+    "Build Email Content": {
+      "main": [[{"node": "Add Contact to Sheet", "type": "main", "index": 0}]]
+    },
+    "Add Contact to Sheet": {
+      "main": [[{"node": "Has Email Address?", "type": "main", "index": 0}]]
+    },
+    "Has Email Address?": {
+      "main": [
+        [{"node": "Send Follow-up Email", "type": "main", "index": 0}],
+        []
+      ]
+    },
+    "Send Follow-up Email": {
+      "main": [[{"node": "Update Email Status", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "2.0.0",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "business-card-processor-wix-v2"
+  },
+  "id": "business-card-processor-wix",
+  "tags": []
+}
